@@ -1,8 +1,14 @@
-from btcp.btcp_socket import BTCPSocket, BTCPStates
-from btcp.lossy_layer import LossyLayer
-from btcp.constants import *
+from src.btcp.btcp_socket import BTCPSocket, BTCPStates
+from src.btcp.lossy_layer import LossyLayer
+from src.btcp.constants import *
+
+# from btcp.btcp_socket import BTCPSocket, BTCPStates
+# from btcp.lossy_layer import LossyLayer
+# from btcp.constants import *
 
 import queue
+from os import urandom
+import time
 
 
 class BTCPClientSocket(BTCPSocket):
@@ -44,6 +50,11 @@ class BTCPClientSocket(BTCPSocket):
         # thread into the network thread. Bounded in size.
         self._sendbuf = queue.Queue(maxsize=1000)
 
+        self.state = BTCPStates.CLOSED
+        self.seqnum = None
+        self.acknum = 0
+        self.received_segments = queue.Queue(maxsize=1000)
+
 
     ###########################################################################
     ### The following section is the interface between the transport layer  ###
@@ -71,6 +82,9 @@ class BTCPClientSocket(BTCPSocket):
 
         Remember, we expect you to implement this *as a state machine!*
         """
+
+        # should put the received segment in the queue self.rceived_segments
+
         pass # present to be able to remove the NotImplementedError without having to implement anything yet.
         raise NotImplementedError("No implementation of lossy_layer_segment_received present. Read the comments & code of client_socket.py.")
 
@@ -146,6 +160,7 @@ class BTCPClientSocket(BTCPSocket):
     ### above.                                                              ###
     ###########################################################################
 
+
     def connect(self):
         """Perform the bTCP three-way handshake to establish a connection.
 
@@ -161,8 +176,54 @@ class BTCPClientSocket(BTCPSocket):
         boolean or enum has the expected value. We do not think you will need
         more advanced thread synchronization in this project.
         """
-        pass # present to be able to remove the NotImplementedError without having to implement anything yet.
-        raise NotImplementedError("No implementation of connect present. Read the comments & code of client_socket.py.")
+        self.seqnum = urandom(2)
+        header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True)
+        checksum = self.in_cksum(header)
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           ack_set=True,
+                                           checksum=checksum
+                                           # window, length
+                                          )
+        # set payload = 0
+        payload = b"".join([b"\x00" for i in range(1008)])
+        # combine header and payload
+        segment = header + payload
+        # send segment
+        self._lossy_layer.send_segment(segment)
+        self.state = BTCPStates.SYN_SENT
+
+        # wait for server to send a segment back
+        # .get() waits until there is a segment in the queue
+        response = self.received_segments.get()
+
+        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
+            self.unpack_segment_header(response)
+
+        # ############ use ack_set ############
+
+        # add 1 to the seqnum of the server
+        self.acknum = seqnum + 1
+        # add 1 to self.seqnum
+        self.seqnum += 1
+        # set ACK
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           ack_set=True
+                                           # window, length
+                                          )
+        checksum = self.in_cksum(header)
+
+        header = self.build_segment_header(self.seqnum,
+                                           acknum=acknum,
+                                           ack_set=True,
+                                           checksum=checksum
+                                           # window, length
+                                          )
+        # send segment
+        segment = header + payload
+        self._lossy_layer.send_segment(segment)
+        self.state = BTCPStates.ESTABLISHED
 
 
     def send(self, data):
