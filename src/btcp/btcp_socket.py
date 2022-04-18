@@ -13,15 +13,14 @@ class BTCPStates(Enum):
     Don't use the integer values of this enum directly. Always refer to them as
     BTCPStates.CLOSED etc.
     """
-    CLOSED    = 0
-    ACCEPTING = 1
-    SYN_SENT  = 2
-    SYN_RCVD  = 3
-    _         = 4 # There's an obvious state that goes here. Give it a name.
-    FIN_SENT  = 5
-    CLOSING   = 6
-    __        = 7 # If you need more states, extend the Enum like this.
-    raise NotImplementedError("Check btcp_socket.py's BTCPStates enum. We left out some states you will need.")
+    CLOSED      = 0
+    ACCEPTING   = 1
+    SYN_SENT    = 2
+    SYN_RCVD    = 3
+    ESTABLISHED = 4 # There's an obvious state that goes here. Give it a name.
+    FIN_SENT    = 5
+    CLOSING     = 6
+    # __          = 7 # If you need more states, extend the Enum like this.
 
 
 class BTCPSocket:
@@ -44,8 +43,16 @@ class BTCPSocket:
         segment, the checksum field in the header should be set to 0x0000, and
         then the resulting checksum should be put in its place.
         """
-        pass # present to be able to remove the NotImplementedError without having to implement anything yet.
-        raise NotImplementedError("No implementation of in_cksum present. Read the comments & code of btcp_socket.py.")
+        # Signal nonsensical request (checksum of nothing?) with 0x0000
+        if not segment:
+            return 0x0000
+
+        checksum = 0
+        for b in struct.iter_unpack('!H', bytes):
+            checksum += b
+            if checksum > 2 ** 16:
+                checksum -= 2 ** 16 - 1  # double minus is adding 1
+        return hex(2 ** 16 - checksum)  # invert the checksum
 
 
     @staticmethod
@@ -85,5 +92,6 @@ class BTCPSocket:
         tupling, so it's easy to simply return all of them in one go rather
         than make a separate method for every individual field.
         """
-        pass
-        raise NotImplementedError("No implementation of unpack_segment_header present. Read the comments & code of btcp_socket.py. You should really implement the packing / unpacking of the header into field values before doing anything else!")
+        seqnum, acknum, flags, window, datalen, checksum = \
+            struct.unpack("!HHBBHH", header)
+        return seqnum, acknum, flags, window, datalen, checksum
