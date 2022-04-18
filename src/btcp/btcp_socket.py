@@ -94,4 +94,9 @@ class BTCPSocket:
         """
         seqnum, acknum, flags, window, datalen, checksum = \
             struct.unpack("!HHBBHH", header)
-        return seqnum, acknum, flags, window, datalen, checksum
+        syn_set = flags > 3
+        flags %= 4
+        ack_set = flags > 2
+        flags %= 2
+        fin_set = flags > 0
+        return seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum
