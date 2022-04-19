@@ -4,7 +4,7 @@ from btcp.constants import *
 
 import queue
 import struct
-
+import time
 
 class BTCPServerSocket(BTCPSocket):
     """bTCP server socket
@@ -44,7 +44,10 @@ class BTCPServerSocket(BTCPSocket):
         """
         super().__init__(window, timeout)
         self._lossy_layer = LossyLayer(self, SERVER_IP, SERVER_PORT, CLIENT_IP, CLIENT_PORT)
-
+        
+        self.state = BTCPStates.CLOSED
+        self.comm = False                      #for communication between lossy and application threads
+        
         # The data buffer used by lossy_layer_segment_received to move data
         # from the network thread into the application thread. Bounded in size.
         # If data overflows the buffer it will get lost -- that's what window
@@ -88,7 +91,7 @@ class BTCPServerSocket(BTCPSocket):
         """
 
         raise NotImplementedError("Only rudimentary implementation of lossy_layer_segment_received present. Read the comments & code of server_socket.py, then remove the NotImplementedError.")
-
+        
         # Get length from header. Change this to a proper segment header unpack
         # after implementing BTCPSocket.unpack_segment_header in btcp_socket.py
         datalen, = struct.unpack("!H", segment[6:8])
@@ -176,9 +179,42 @@ class BTCPServerSocket(BTCPSocket):
         boolean or enum has the expected value. We do not think you will need
         more advanced thread synchronization in this project.
         """
-        pass # present to be able to remove the NotImplementedError without having to implement anything yet.
-        raise NotImplementedError("No implementation of accept present. Read the comments & code of server_socket.py.")
-
+        
+        self.state = BTCPStates.ACCEPTING
+        timeout = time.time() + 60*5        #5 minutes timeout
+        while(!self.comm):
+            if time.time() > timeout:
+                self.state = BTCPStates.CLOSED
+                self.comm = False
+                return
+        
+        self.state = BTCPStates.SYN_RCVD
+        
+        header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
+        payload = b"".join([b"\x00" for i in range(1008)])
+        checksum = self.in_cksum(header+payload)
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           syn_set=True,
+                                           ack_set=True,
+                                           checksum=checksum
+                                           # window, length
+                                          )
+        syn_ack = header + payload
+        
+        retries = 0
+        while(self.comm && retries < 10):
+            self._lossy_layer.send_segment(syn_ack)
+            retries += 1
+            time.sleep(10)
+           
+        if(self.comm == True):
+            self.accept()
+            
+         self.state = BTCPStates.ESTABLISHED
+         
+        
+        
 
     def recv(self):
         """Return data that was received from the client to the application in
