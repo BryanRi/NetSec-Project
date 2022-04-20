@@ -161,7 +161,7 @@ class BTCPServerSocket(BTCPSocket):
     ### of acknowledgements and synchronization. You should implement that  ###
     ### above.                                                              ###
     ###########################################################################
-
+            
     def accept(self):
         """Accept and perform the bTCP three-way handshake to establish a
         connection.
@@ -180,38 +180,38 @@ class BTCPServerSocket(BTCPSocket):
         more advanced thread synchronization in this project.
         """
         
-        self.state = BTCPStates.ACCEPTING
-        timeout = time.time() + 60*5        #5 minutes timeout
-        while(!self.comm):
-            if time.time() > timeout:
-                self.state = BTCPStates.CLOSED
-                self.comm = False
-                return
-        
-        self.state = BTCPStates.SYN_RCVD
-        
-        header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
-        payload = b"".join([b"\x00" for i in range(1008)])
-        checksum = self.in_cksum(header+payload)
-        header = self.build_segment_header(self.seqnum,
-                                           self.acknum,
-                                           syn_set=True,
-                                           ack_set=True,
-                                           checksum=checksum
-                                           # window, length
-                                          )
-        syn_ack = header + payload
-        
-        retries = 0
-        while(self.comm && retries < 10):
-            self._lossy_layer.send_segment(syn_ack)
-            retries += 1
-            time.sleep(10)
-           
-        if(self.comm == True):
-            self.accept()
+        while true:
+            timeout = time.time() + 60*5
+            self.state = BTCPStates.ACCEPTING
+            while(!self.comm):
+                if time.time() > timeout:
+                    self.state = BTCPStates.CLOSED
+                    self.comm = False
+                    return
             
-         self.state = BTCPStates.ESTABLISHED
+            self.state = BTCPStates.SYN_RCVD
+            header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
+            payload = b"".join([b"\x00" for i in range(1008)])
+            checksum = self.in_cksum(header+payload)
+            header = self.build_segment_header(self.seqnum,
+                                               self.acknum,
+                                               syn_set=True,
+                                               ack_set=True,
+                                               checksum=checksum
+                                               # window, length
+                                              )
+            syn_ack = header + payload
+            retries = 0
+            while(self.comm && retries < 10):
+                self._lossy_layer.send_segment(syn_ack)
+                retries += 1
+                time.sleep(10)
+           
+            if(self.comm == True):
+                continue
+                
+            self.state = BTCPStates.ESTABLISHED
+            return
          
         
         
