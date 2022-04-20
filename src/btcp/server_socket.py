@@ -47,6 +47,8 @@ class BTCPServerSocket(BTCPSocket):
         
         self.state = BTCPStates.CLOSED
         self.comm = False                      #for communication between lossy and application threads
+        self.seqnum = None
+        self.acknum = 0 
         
         # The data buffer used by lossy_layer_segment_received to move data
         # from the network thread into the application thread. Bounded in size.
@@ -89,16 +91,42 @@ class BTCPServerSocket(BTCPSocket):
 
         Remember, we expect you to implement this *as a state machine!*
         """
-
-        raise NotImplementedError("Only rudimentary implementation of lossy_layer_segment_received present. Read the comments & code of server_socket.py, then remove the NotImplementedError.")
+        if(self.state == BTCPStates.CLOSED):
+            return #don't receive segments if server is in the CLOSED state?
         
         # Get length from header. Change this to a proper segment header unpack
         # after implementing BTCPSocket.unpack_segment_header in btcp_socket.py
         datalen, = struct.unpack("!H", segment[6:8])
         # Slice data from incoming segment.
+        
+        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum =  unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
+        
+        SYNACK = syn_set && ack_set
+        SYN = syn_set && !SYNACK
+        ACK = ack_set && !SYNACK
+        FIN = fin_set && !SYN && !ACK
+        NOFLAG = !(SYN || ACK || FIN || SYNACK)
+        
+        if(self.in_cksum(build_segment_header(seqnum, acknum, syn_set, ack_set, fin_set, window, datalen) + chunk) != checksum):
+            return # do something if checksum doesn't match
+        
+        if(self.state ==BTCPStates.ACCEPTING && !self.comm && SYN):
+            self.seqnum = seqnum
+            self.acknum = acknum + 1
+            self.comm = True
+            return #?
+        
+        if(self.state ==BTCPStates.SYN_RCVD && self.comm && SYNACK)
+            self.seqnum = seqnum
+            self.acknum = acknum + 1
+            self.comm = False
+            return #?
+        if(self.state ==BTCPStates.SYN_ESTABLISHED && FIN):
+            
         # Pass data into receive buffer so that the application thread can
         # retrieve it.
+        if(self.state == BTCPStates.SYN_ESTABLISHED && NOFLAG):
         try:
             self._recvbuf.put_nowait(chunk)
         except queue.Full:
