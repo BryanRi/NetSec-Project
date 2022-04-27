@@ -50,7 +50,6 @@ class BTCPServerSocket(BTCPSocket):
         self.seqnum = None
         self.acknum = 0
         
-        
         # The data buffer used by lossy_layer_segment_received to move data
         # from the network thread into the application thread. Bounded in size.
         # If data overflows the buffer it will get lost -- that's what window
@@ -125,30 +124,28 @@ class BTCPServerSocket(BTCPSocket):
                 self.comm = False
                 return #?
             
-            if(self.state == BTCPStates.CLOSING && self.comm && ACK):    
-                self.comm = False
+            if(self.state == BTCPStates.CLOSING && ACK):    
                 self.state = BTCPStates.CLOSED
                 return
             
-            if(self.state == BTCPStates.CLOSING && self.comm && FIN):  
+            if(self.state == BTCPStates.CLOSING && FIN):  
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
                 payload = b"".join([b"\x00" for i in range(1008)])
                 checksum = self.in_cksum(header)
                 header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, # window, length)
                 fin_ack = header + payload
-                self._lossy_layer.send_segment(syn_ack)
+                self._lossy_layer.send_segment(fin_ack)
                 return
-             
+                                                   
         else:
-            if(!self.comm && FIN): 
+            if(FIN): 
                 self.state = BTCPStates.CLOSING
-                self.comm = True
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
                 payload = b"".join([b"\x00" for i in range(1008)])
                 checksum = self.in_cksum(header)
                 header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, # window, length)
                 fin_ack = header + payload
-                self._lossy_layer.send_segment(syn_ack)
+                self._lossy_layer.send_segment(fin_ack)
                 return
                 
             try:
