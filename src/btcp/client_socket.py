@@ -53,7 +53,10 @@ class BTCPClientSocket(BTCPSocket):
         self.state = BTCPStates.CLOSED
         self.seqnum = None
         self.acknum = 0
-        self.received_segments = queue.Queue(maxsize=1000)
+        self.client_window = 15
+        self.server_window = None
+        self.received_segments = queue.Queue(maxsize=self.client_window)
+        self.last_rec_ack = None  # last acknowledged segment by the server
 
 
     ###########################################################################
@@ -83,10 +86,35 @@ class BTCPClientSocket(BTCPSocket):
         Remember, we expect you to implement this *as a state machine!*
         """
 
-        # should put the received segment in the queue self.rceived_segments
+        if self.state == BTCPStates.CLOSED:
+            return None
 
-        pass # present to be able to remove the NotImplementedError without having to implement anything yet.
-        raise NotImplementedError("No implementation of lossy_layer_segment_received present. Read the comments & code of client_socket.py.")
+        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
+            self.unpack_segment_header(segment)
+
+        # checksum verification
+        check = self.in_cksum(segment)
+        if check != 0xFFFF:
+            return None  # do nothing when checksum fails
+
+        # connection handshake
+        elif self.state == BTCPStates.SYN_SENT:
+            if syn_set == 1 and ack_set == 1 and self.seqnum+1 == acknum:
+                self.acknum = seqnum
+                self.server_window = window
+                self.received_segments.put(segment)
+        # termination handshake
+        elif self.state == BTCPStates.FIN_SENT:
+            if ack_set == 1 and fin_set == 1 and self.seqnum+1 == acknum:
+                self.received_segments.put(segment)
+        # regular ack from server
+        elif self.state == BTCPStates.ESTABLISHED:
+            self.server_window = window
+            if self.last_rec_ack < acknum and ack_set == 1:
+                self.last_rec_ack = acknum
+            if self.acknum+1 == seqnum and ack_set == 1:
+                self.received_segments.put(segment)
+                self.acknum = seqnum
 
 
     def lossy_layer_tick(self):
@@ -113,8 +141,6 @@ class BTCPClientSocket(BTCPSocket):
         candidate to put in a helper method which can be called from either
         lossy_layer_segment_received or lossy_layer_tick.
         """
-
-        raise NotImplementedError("Only rudimentary implementation of lossy_layer_tick present. Read the comments & code of client_socket.py, then remove the NotImplementedError.")
 
         # Send all data available for sending.
         # Relies on an eventual exception to break from the loop when no data
@@ -177,13 +203,17 @@ class BTCPClientSocket(BTCPSocket):
         more advanced thread synchronization in this project.
         """
         self.seqnum = urandom(2)
-        header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True)
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           syn_set=True,
+                                           window=self.client_window)
         checksum = self.in_cksum(header)
         header = self.build_segment_header(self.seqnum,
                                            self.acknum,
-                                           ack_set=True,
+                                           syn_set=True,
+                                           window=self.client_window,
                                            checksum=checksum
-                                           # window, length
+                                           # length
                                           )
         # set payload = 0
         payload = b"".join([b"\x00" for i in range(1008)])
@@ -197,28 +227,25 @@ class BTCPClientSocket(BTCPSocket):
         # .get() waits until there is a segment in the queue
         response = self.received_segments.get()
 
-        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
-            self.unpack_segment_header(response)
-
-        # ############ use ack_set ############
-
         # add 1 to the seqnum of the server
-        self.acknum = seqnum + 1
+        self.acknum += 1
         # add 1 to self.seqnum
         self.seqnum += 1
         # set ACK
         header = self.build_segment_header(self.seqnum,
                                            self.acknum,
                                            ack_set=True
-                                           # window, length
+                                           # length=
+                                           # window=
                                           )
         checksum = self.in_cksum(header)
 
         header = self.build_segment_header(self.seqnum,
-                                           acknum=acknum,
+                                           self.acknum,
                                            ack_set=True,
                                            checksum=checksum
-                                           # window, length
+                                           # length=
+                                           # window=
                                           )
         # send segment
         segment = header + payload
@@ -254,8 +281,6 @@ class BTCPClientSocket(BTCPSocket):
         done later.
         """
 
-        raise NotImplementedError("Only rudimentary implementation of send present. Read the comments & code of client_socket.py, then remove the NotImplementedError.")
-
         # Example with a finite buffer: a queue with at most 1000 chunks,
         # for a maximum of 985KiB data buffered to get turned into packets.
         # See BTCPSocket__init__() in btcp_socket.py for its construction.
@@ -288,8 +313,63 @@ class BTCPClientSocket(BTCPSocket):
         boolean or enum has the expected value. We do not think you will need
         more advanced thread synchronization in this project.
         """
-        pass # present to be able to remove the NotImplementedError without having to implement anything yet.
-        raise NotImplementedError("No implementation of shutdown present. Read the comments & code of client_socket.py.")
+        # set payload = 0
+        payload = b"".join([b"\x00" for i in range(1008)])
+        # add 1 to the seqnum of the server
+        self.acknum += 1
+        # add 1 to self.seqnum
+        self.seqnum += 1
+        # set ACK
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           fin_set=True
+                                           # window, length
+                                          )
+        checksum = self.in_cksum(header)
+
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           fin_set=True,
+                                           checksum=checksum
+                                           # window, length
+                                          )
+        # send segment
+        segment = header + payload
+        self._lossy_layer.send_segment(segment)
+        self.state = BTCPStates.FIN_SENT
+
+        # search for ack/fin segment in the self.received_segments
+        response = self.received_segments.get()
+        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
+            self.unpack_segment_header(response)
+        while not (syn_set == 1 and ack_set == 1 and self.seqnum+1 == acknum):
+            response = self.received_segments.get()
+            seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
+                self.unpack_segment_header(response)
+
+        # respond with ack
+        # add 1 to the seqnum of the server
+        self.acknum += 1
+        # add 1 to self.seqnum
+        self.seqnum += 1
+        # set ACK
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           ack_set=True
+                                           # window, length
+                                           )
+        checksum = self.in_cksum(header)
+
+        header = self.build_segment_header(self.seqnum,
+                                           self.acknum,
+                                           ack_set=True,
+                                           checksum=checksum
+                                           # window, length
+                                           )
+        # send segment
+        segment = header + payload
+        self._lossy_layer.send_segment(segment)
+        self.state = BTCPStates.CLOSED
 
 
     def close(self):
