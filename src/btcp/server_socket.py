@@ -1,6 +1,6 @@
-from btcp.btcp_socket import BTCPSocket, BTCPStates
-from btcp.lossy_layer import LossyLayer
-from btcp.constants import *
+from src.btcp.btcp_socket import BTCPSocket, BTCPStates
+from src.btcp.lossy_layer import LossyLayer
+from src.btcp.constants import *
 
 import queue
 import struct
@@ -92,48 +92,49 @@ class BTCPServerSocket(BTCPSocket):
         Remember, we expect you to implement this *as a state machine!*
         """
         if(self.state == BTCPStates.CLOSED):
-            return #don't receive segments if server is in the CLOSED state?
+            return None  #don't receive segments if server is in the CLOSED state?
         
         # Get length from header. Change this to a proper segment header unpack
         # after implementing BTCPSocket.unpack_segment_header in btcp_socket.py
         datalen, = struct.unpack("!H", segment[6:8])
         # Slice data from incoming segment.
         
-        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum =  unpack_segment_header(segment[:HEADER_SIZE])
+        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum =  self.unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
         
-        SYNACK = syn_set && ack_set
-        SYN = syn_set && !SYNACK
-        ACK = ack_set && !SYNACK
-        FIN = fin_set && !SYN && !ACK
-        NOFLAG = !(SYN || ACK || FIN || SYNACK)
+        SYNACK = syn_set and ack_set
+        SYN = syn_set and not SYNACK
+        ACK = ack_set and not SYNACK
+        FIN = fin_set and not SYN and not ACK
+        NOFLAG = not (SYN or ACK or FIN or SYNACK)
         
-        if(self.in_cksum(build_segment_header(seqnum, acknum, syn_set, ack_set, fin_set, window, datalen) + chunk) != checksum):
-            return # do something if checksum doesn't match
+        if self.in_cksum(self.build_segment_header(seqnum, acknum, syn_set, ack_set, fin_set, window, datalen) + chunk) != checksum:
+            return None  # do something if checksum doesn't match
         
-        if(self.state ==BTCPStates.ACCEPTING && !self.comm && SYN):
+        if self.state == BTCPStates.ACCEPTING and not self.comm and SYN:
             self.seqnum = seqnum
             self.acknum = acknum + 1
             self.comm = True
-            return #?
+            return None  #?
         
-        if(self.state ==BTCPStates.SYN_RCVD && self.comm && SYNACK)
+        if self.state ==BTCPStates.SYN_RCVD and self.comm and SYNACK:
             self.seqnum = seqnum
             self.acknum = acknum + 1
             self.comm = False
-            return #?
-        if(self.state ==BTCPStates.SYN_ESTABLISHED && FIN):
+            return None  #?
+        if self.state ==BTCPStates.SYN_ESTABLISHED and FIN:
+            print()
             
         # Pass data into receive buffer so that the application thread can
         # retrieve it.
-        if(self.state == BTCPStates.SYN_ESTABLISHED && NOFLAG):
-        try:
-            self._recvbuf.put_nowait(chunk)
-        except queue.Full:
-            # Data gets silently dropped if the receive buffer is full. You
-            # need to ensure this doesn't happen by using window sizes and not
-            # acknowledging dropped data.
-            pass
+        if self.state == BTCPStates.SYN_ESTABLISHED and NOFLAG:
+            try:
+                self._recvbuf.put_nowait(chunk)
+            except queue.Full:
+                # Data gets silently dropped if the receive buffer is full. You
+                # need to ensure this doesn't happen by using window sizes and not
+                # acknowledging dropped data.
+                pass
 
 
     def lossy_layer_tick(self):
@@ -208,10 +209,10 @@ class BTCPServerSocket(BTCPSocket):
         more advanced thread synchronization in this project.
         """
         
-        while true:
+        while True:
             timeout = time.time() + 60*5
             self.state = BTCPStates.ACCEPTING
-            while(!self.comm):
+            while(not self.comm):
                 if time.time() > timeout:
                     self.state = BTCPStates.CLOSED
                     self.comm = False
@@ -230,7 +231,7 @@ class BTCPServerSocket(BTCPSocket):
                                               )
             syn_ack = header + payload
             retries = 0
-            while(self.comm && retries < 10):
+            while(self.comm and retries < 10):
                 self._lossy_layer.send_segment(syn_ack)
                 retries += 1
                 time.sleep(10)
