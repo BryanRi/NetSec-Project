@@ -91,7 +91,7 @@ class BTCPServerSocket(BTCPSocket):
         Remember, we expect you to implement this *as a state machine!*
         """
         if(self.state == BTCPStates.CLOSED):
-            return #don't receive segments if server is in the CLOSED state
+            return None #don't receive segments if server is in the CLOSED state
         
         # Get length from header. Change this to a proper segment header unpack
         # after implementing BTCPSocket.unpack_segment_header in btcp_socket.py
@@ -101,8 +101,10 @@ class BTCPServerSocket(BTCPSocket):
         seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum =  unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
         
-        if(self.in_cksum(build_segment_header(seqnum, acknum, syn_set, ack_set, fin_set, window, datalen) + chunk) != checksum):
-            return # do something if checksum doesn't match
+        # checksum verification
+        check = self.in_cksum(segment)
+        if check != 0xFFFF:
+            return None
         
         SYNACK = syn_set && ack_set
         SYN = syn_set && !SYNACK
