@@ -1,6 +1,6 @@
-from src.btcp.btcp_socket import BTCPSocket, BTCPStates
-from src.btcp.lossy_layer import LossyLayer
-from src.btcp.constants import *
+from btcp.btcp_socket import BTCPSocket, BTCPStates
+from btcp.lossy_layer import LossyLayer
+from btcp.constants import *
 
 import queue
 import struct
@@ -48,7 +48,7 @@ class BTCPServerSocket(BTCPSocket):
         self.state = BTCPStates.CLOSED
         self.comm = False                      #for communication between lossy and application threads
         self.seqnum = None
-        self.acknum = 0 
+        self.acknum = 0
         
         # The data buffer used by lossy_layer_segment_received to move data
         # from the network thread into the application thread. Bounded in size.
@@ -92,49 +92,70 @@ class BTCPServerSocket(BTCPSocket):
         Remember, we expect you to implement this *as a state machine!*
         """
         if(self.state == BTCPStates.CLOSED):
-            return None  #don't receive segments if server is in the CLOSED state?
+            return #don't receive segments if server is in the CLOSED state
         
         # Get length from header. Change this to a proper segment header unpack
         # after implementing BTCPSocket.unpack_segment_header in btcp_socket.py
         datalen, = struct.unpack("!H", segment[6:8])
         # Slice data from incoming segment.
         
-        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum =  self.unpack_segment_header(segment[:HEADER_SIZE])
+        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum =  unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
         
-        SYNACK = syn_set and ack_set
-        SYN = syn_set and not SYNACK
-        ACK = ack_set and not SYNACK
-        FIN = fin_set and not SYN and not ACK
-        NOFLAG = not (SYN or ACK or FIN or SYNACK)
+        if(self.in_cksum(build_segment_header(seqnum, acknum, syn_set, ack_set, fin_set, window, datalen) + chunk) != checksum):
+            return # do something if checksum doesn't match
         
-        if self.in_cksum(self.build_segment_header(seqnum, acknum, syn_set, ack_set, fin_set, window, datalen) + chunk) != checksum:
-            return None  # do something if checksum doesn't match
+        SYNACK = syn_set && ack_set
+        SYN = syn_set && !SYNACK
+        ACK = ack_set && !SYNACK
+        FIN = fin_set && !SYN && !ACK
+        NOFLAG = !(SYN || ACK || FIN || SYNACK)
         
-        if self.state == BTCPStates.ACCEPTING and not self.comm and SYN:
-            self.seqnum = seqnum
-            self.acknum = acknum + 1
-            self.comm = True
-            return None  #?
-        
-        if self.state ==BTCPStates.SYN_RCVD and self.comm and SYNACK:
-            self.seqnum = seqnum
-            self.acknum = acknum + 1
-            self.comm = False
-            return None  #?
-        if self.state ==BTCPStates.SYN_ESTABLISHED and FIN:
-            print()
+        if(self.state != BTCPStates.ESTABLISHED):
+            if(self.state == BTCPStates.ACCEPTING && !self.comm && SYN):
+                self.seqnum = seqnum
+                self.acknum = acknum + 1
+                self.comm = True
+                return #?
+
+            if(self.state == BTCPStates.SYN_RCVD && self.comm && SYNACK)
+                self.seqnum = seqnum
+                self.acknum = acknum + 1
+                self.comm = False
+                return #?
             
-        # Pass data into receive buffer so that the application thread can
-        # retrieve it.
-        if self.state == BTCPStates.SYN_ESTABLISHED and NOFLAG:
-            try:
-                self._recvbuf.put_nowait(chunk)
-            except queue.Full:
-                # Data gets silently dropped if the receive buffer is full. You
-                # need to ensure this doesn't happen by using window sizes and not
-                # acknowledging dropped data.
-                pass
+            if(self.state == BTCPStates.CLOSING && ACK):    
+                self.state = BTCPStates.CLOSED
+                return
+            
+            if(self.state == BTCPStates.CLOSING && FIN):  
+                header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
+                payload = b"".join([b"\x00" for i in range(1008)])
+                checksum = self.in_cksum(header)
+                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, # window, length)
+                fin_ack = header + payload
+                self._lossy_layer.send_segment(fin_ack)
+                return
+                                                   
+        else:
+            if(FIN): 
+                self.state = BTCPStates.CLOSING
+                header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
+                payload = b"".join([b"\x00" for i in range(1008)])
+                checksum = self.in_cksum(header)
+                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, # window, length)
+                fin_ack = header + payload
+                self._lossy_layer.send_segment(fin_ack)
+                return
+            
+            if(NOFLAG):
+                try:
+                    self._recvbuf.put_nowait(chunk)
+                except queue.Full:
+                    # Data gets silently dropped if the receive buffer is full. You
+                    # need to ensure this doesn't happen by using window sizes and not
+                    # acknowledging dropped data.
+                    pass
 
 
     def lossy_layer_tick(self):
@@ -209,10 +230,10 @@ class BTCPServerSocket(BTCPSocket):
         more advanced thread synchronization in this project.
         """
         
-        while True:
+        while true:
             timeout = time.time() + 60*5
             self.state = BTCPStates.ACCEPTING
-            while(not self.comm):
+            while(!self.comm):
                 if time.time() > timeout:
                     self.state = BTCPStates.CLOSED
                     self.comm = False
@@ -221,17 +242,11 @@ class BTCPServerSocket(BTCPSocket):
             self.state = BTCPStates.SYN_RCVD
             header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
             payload = b"".join([b"\x00" for i in range(1008)])
-            checksum = self.in_cksum(header+payload)
-            header = self.build_segment_header(self.seqnum,
-                                               self.acknum,
-                                               syn_set=True,
-                                               ack_set=True,
-                                               checksum=checksum
-                                               # window, length
-                                              )
+            checksum = self.in_cksum(header)
+            header = self.build_segment_header(self.seqnum,self.acknum,syn_set=True,ack_set=True,checksum=checksum, # window, length)
             syn_ack = header + payload
             retries = 0
-            while(self.comm and retries < 10):
+            while(self.comm && retries < 10):
                 self._lossy_layer.send_segment(syn_ack)
                 retries += 1
                 time.sleep(10)
