@@ -114,14 +114,11 @@ class BTCPServerSocket(BTCPSocket):
         
         if(self.state != BTCPStates.ESTABLISHED):
             if(self.state == BTCPStates.ACCEPTING && SYN):
-                self.seqnum = seqnum
-                self.acknum = acknum + 1
+                self.acknum = seqnum + 1
                 self.state = BTCPStates.SYN_RCVD
                 return #?
 
-            if(self.state == BTCPStates.SYN_RCVD && SYNACK)
-                self.seqnum = seqnum
-                self.acknum = acknum + 1
+            if(self.state == BTCPStates.SYN_RCVD && SYNACK && (self.seqnum+1 == acknum)):
                 self.state = BTCPStates.ESTABLISHED
                 return #?
             
@@ -238,7 +235,8 @@ class BTCPServerSocket(BTCPSocket):
                 if time.time() > timeout:
                     self.state = BTCPStates.CLOSED
                     return
-                                                   
+            
+            self.seqnum = urandom(2)
             header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
             payload = b"".join([b"\x00" for i in range(1008)])
             checksum = self.in_cksum(header)
