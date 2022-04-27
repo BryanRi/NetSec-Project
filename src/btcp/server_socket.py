@@ -111,16 +111,16 @@ class BTCPServerSocket(BTCPSocket):
         NOFLAG = !(SYN || ACK || FIN || SYNACK)
         
         if(self.state != BTCPStates.ESTABLISHED):
-            if(self.state == BTCPStates.ACCEPTING && !self.comm && SYN):
+            if(self.state == BTCPStates.ACCEPTING && SYN):
                 self.seqnum = seqnum
                 self.acknum = acknum + 1
-                self.comm = True
+                self.state = BTCPStates.SYN_RCVD
                 return #?
 
-            if(self.state == BTCPStates.SYN_RCVD && self.comm && SYNACK)
+            if(self.state == BTCPStates.SYN_RCVD && SYNACK)
                 self.seqnum = seqnum
                 self.acknum = acknum + 1
-                self.comm = False
+                self.state = BTCPStates.ESTABLISHED
                 return #?
             
             if(self.state == BTCPStates.CLOSING && ACK):    
