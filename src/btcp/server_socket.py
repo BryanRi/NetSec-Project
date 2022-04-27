@@ -46,7 +46,6 @@ class BTCPServerSocket(BTCPSocket):
         self._lossy_layer = LossyLayer(self, SERVER_IP, SERVER_PORT, CLIENT_IP, CLIENT_PORT)
         
         self.state = BTCPStates.CLOSED
-        self.comm = False                      #for communication between lossy and application threads
         self.seqnum = None
         self.acknum = 0
         
@@ -233,29 +232,26 @@ class BTCPServerSocket(BTCPSocket):
         while true:
             timeout = time.time() + 60*5
             self.state = BTCPStates.ACCEPTING
-            while(!self.comm):
+            while(self.state != BTCPStates.SYN_RCVD):
                 if time.time() > timeout:
                     self.state = BTCPStates.CLOSED
-                    self.comm = False
                     return
-            
-            self.state = BTCPStates.SYN_RCVD
+                                                   
             header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
             payload = b"".join([b"\x00" for i in range(1008)])
             checksum = self.in_cksum(header)
             header = self.build_segment_header(self.seqnum,self.acknum,syn_set=True,ack_set=True,checksum=checksum, # window, length)
             syn_ack = header + payload
             retries = 0
-            while(self.comm && retries < 10):
+            while(self.state != BTCPStates.ESTABLISHED && retries < 10):
                 self._lossy_layer.send_segment(syn_ack)
                 retries += 1
                 time.sleep(10)
            
-            if(self.comm == True):
-                continue
-                
-            self.state = BTCPStates.ESTABLISHED
-            return
+            if(self.state == BTCPStates.ESTABLISHED):
+                return
+                                               
+            continue
          
         
         
