@@ -147,14 +147,15 @@ class BTCPServerSocket(BTCPSocket):
                 fin_ack = header + payload
                 self._lossy_layer.send_segment(fin_ack)
                 return
-                
-            try:
-                self._recvbuf.put_nowait(chunk)
-            except queue.Full:
-                # Data gets silently dropped if the receive buffer is full. You
-                # need to ensure this doesn't happen by using window sizes and not
-                # acknowledging dropped data.
-                pass
+            
+            if(NOFLAG):
+                try:
+                    self._recvbuf.put_nowait(chunk)
+                except queue.Full:
+                    # Data gets silently dropped if the receive buffer is full. You
+                    # need to ensure this doesn't happen by using window sizes and not
+                    # acknowledging dropped data.
+                    pass
 
 
     def lossy_layer_tick(self):
