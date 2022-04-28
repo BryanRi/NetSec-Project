@@ -162,9 +162,8 @@ class BTCPServerSocket(BTCPSocket):
             if(NOFLAG):
                 self.ack_timeout = None
                 if(seqnum == (self.acknum + 1)):
+                    self._lossy_layer.send_segment(generate_ack())
                     self.acknum += 1
-                    ########## self.seqnum += 1 - no seqnum for server?
-                    self._lossy_layer.send_segment(generate_ack())                              
                     try:
                         self._recvbuf.put_nowait(chunk)
                     except queue.Full:
@@ -276,8 +275,6 @@ class BTCPServerSocket(BTCPSocket):
                 if time.time() >= connect_timeout:
                     self.state = BTCPStates.CLOSED
                     return
-            
-            ###self.seqnum = urandom(2) does the server need seqnum?
             
             header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
             payload = b"".join([b"\x00" for i in range(1008)])
