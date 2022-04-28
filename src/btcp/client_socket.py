@@ -55,8 +55,10 @@ class BTCPClientSocket(BTCPSocket):
         self.acknum = 0
         self.client_window = WINDOW
         self.server_window = None
-        self.received_segments = queue.Queue(maxsize=WINDOW)
         self.last_rec_ack = None  # last acknowledged segment by the server
+        self.synack_recv = False
+        self.finack_recv = False
+        self.segments_in_transit = []
 
 
     ###########################################################################
@@ -70,6 +72,7 @@ class BTCPClientSocket(BTCPSocket):
     ### Of course you can implement this using any helper methods you want  ###
     ### to add.                                                             ###
     ###########################################################################
+
 
     def lossy_layer_segment_received(self, segment):
         """Called by the lossy layer whenever a segment arrives.
@@ -102,19 +105,24 @@ class BTCPClientSocket(BTCPSocket):
             if syn_set == 1 and ack_set == 1 and self.seqnum+1 == acknum:
                 self.acknum = seqnum
                 self.server_window = window
-                self.received_segments.put(segment)
+                self.synack_recv = True
         # termination handshake
         elif self.state == BTCPStates.FIN_SENT:
             if ack_set == 1 and fin_set == 1 and self.seqnum+1 == acknum:
-                self.received_segments.put(segment)
+                self.finack_recv = True
+                # self.received_segments.put(segment)
         # regular ack from server
         elif self.state == BTCPStates.ESTABLISHED:
             self.server_window = window
             if self.last_rec_ack < acknum and ack_set == 1:
                 self.last_rec_ack = acknum
-            if self.acknum+1 == seqnum and ack_set == 1:
-                self.received_segments.put(segment)
-                self.acknum = seqnum
+                # clean up the segments in transit queue
+                i = 0
+                timeout, acknum, segment = self.segments_in_transit[i]
+                while self.last_rec_ack > acknum:
+                    i += 1
+                    acknum, segment = self.segments_in_transit[i]
+                self.segments_in_transit = self.segments_in_transit[i:]
 
 
     def lossy_layer_tick(self):
@@ -147,15 +155,35 @@ class BTCPClientSocket(BTCPSocket):
         # is available.
         # You should be checking whether there's space in the window as well,
         # and storing the segments for retransmission somewhere.
-        while True:
+
+        # resend all segments whose timer has run out
+        if len(self.segments_in_transit) > 0:
+            timeout, seqnum, segment = self.segments_in_transit[0]
+            while timeout+TIMEOUT > time.time():
+                self._lossy_layer.send_segment(segment)
+
+        while self.seqnum - self.last_rec_ack < self.server_window:
             try:
                 # Get a chunk of data from the buffer, if available.
                 chunk = self._sendbuf.get_nowait()
                 datalen = len(chunk)
                 if datalen < PAYLOAD_SIZE:
                     chunk = chunk + b'\x00' * (PAYLOAD_SIZE - datalen)
-                segment = self.build_segment_header(0, 0, length=datalen) + chunk
+                header = self.build_segment_header(self.seqnum,
+                                                   self.acknum,
+                                                   window=self.client_window,
+                                                   length=datalen
+                                                   )
+                checksum = self.in_cksum(header)
+                segment = self.build_segment_header(self.seqnum,
+                                                    self.acknum,
+                                                    window=self.client_window,
+                                                    length=datalen,
+                                                    checksum=checksum
+                                                    ) + chunk
+                self.segments_in_transit.append((time.time(), self.seqnum, segment))
                 self._lossy_layer.send_segment(segment)
+                self.seqnum += 1
             except queue.Empty:
                 # No data was available for sending.
                 break
@@ -214,9 +242,9 @@ class BTCPClientSocket(BTCPSocket):
                                            window=self.client_window,
                                            checksum=checksum
                                            # length
-                                          )
+                                           )
         # set payload = 0
-        payload = b"".join([b"\x00" for i in range(1008)])
+        payload = b"".join([b"\x00" for _ in range(1008)])
         # combine header and payload
         segment = header + payload
         # send segment
@@ -224,15 +252,16 @@ class BTCPClientSocket(BTCPSocket):
         self.state = BTCPStates.SYN_SENT
 
         # wait for server to send a segment back
-        response = None
-        retries = 0
-        while not response and retries < RETRIES:
-            try:
-                response = self.received_segments.get(timeout=TIMEOUT)
-            except queue.Empty:
+        for i in range(RETRIES):
+            timeout = time.time() + TIMEOUT
+            while time.time() < timeout and not self.synack_recv:
+                time.sleep(TIMER_TICK / 1000)
+            if not self.synack_recv:
                 self._lossy_layer.send_segment(segment)
-                retries += 1
-        if retries == RETRIES:
+            else:
+                break
+
+        if not self.synack_recv:
             self.state = BTCPStates.CLOSED
         else:
             # add 1 to the seqnum of the server
@@ -242,19 +271,19 @@ class BTCPClientSocket(BTCPSocket):
             # set ACK
             header = self.build_segment_header(self.seqnum,
                                                self.acknum,
-                                               ack_set=True
+                                               ack_set=True,
+                                               window=self.client_window
                                                # length=
-                                               # window=
-                                              )
+                                               )
             checksum = self.in_cksum(header)
 
             header = self.build_segment_header(self.seqnum,
                                                self.acknum,
                                                ack_set=True,
-                                               checksum=checksum
+                                               checksum=checksum,
+                                               window=self.client_window
                                                # length=
-                                               # window=
-                                              )
+                                               )
             # send segment
             segment = header + payload
             self._lossy_layer.send_segment(segment)
@@ -322,7 +351,7 @@ class BTCPClientSocket(BTCPSocket):
         more advanced thread synchronization in this project.
         """
         # set payload = 0
-        payload = b"".join([b"\x00" for i in range(1008)])
+        payload = b"".join([b"\x00" for _ in range(1008)])
         # add 1 to the seqnum of the server
         self.acknum += 1
         # add 1 to self.seqnum
@@ -330,34 +359,35 @@ class BTCPClientSocket(BTCPSocket):
         # set ACK
         header = self.build_segment_header(self.seqnum,
                                            self.acknum,
-                                           fin_set=True
-                                           # window, length
-                                          )
+                                           fin_set=True,
+                                           window=self.client_window
+                                           # length
+                                           )
         checksum = self.in_cksum(header)
 
         header = self.build_segment_header(self.seqnum,
                                            self.acknum,
                                            fin_set=True,
+                                           window=self.client_window,
                                            checksum=checksum
-                                           # window, length
-                                          )
+                                           # length
+                                           )
         # send segment
         segment = header + payload
         self._lossy_layer.send_segment(segment)
         self.state = BTCPStates.FIN_SENT
 
         # search for ack/fin segment in the self.received_segments
-        syn_set, ack_set, acknum = None, None, None
-        retries = 0
-        while not (syn_set == 1 and ack_set == 1 and self.seqnum+1 == acknum) and retries < RETRIES:
-            try:
-                response = self.received_segments.get(timeout=TIMEOUT)
-                seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
-                    self.unpack_segment_header(response)
-            except queue.Empty:
+        for i in range(RETRIES):
+            timeout = time.time() + TIMEOUT
+            while time.time() < timeout and not self.finack_recv:
+                time.sleep(TIMER_TICK / 1000)
+            if not self.finack_recv:
                 self._lossy_layer.send_segment(segment)
-                retries += 1
-        if retries == RETRIES:
+            else:
+                break
+
+        if not self.finack_recv:
             # number of retries has been exceeded, close connection
             self.state = BTCPStates.CLOSED
         else:
