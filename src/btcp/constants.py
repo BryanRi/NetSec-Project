@@ -30,3 +30,10 @@ HEADER_SIZE, PAYLOAD_SIZE, SEGMENT_SIZE:
 HEADER_SIZE = 10
 PAYLOAD_SIZE = 1008
 SEGMENT_SIZE = HEADER_SIZE + PAYLOAD_SIZE
+
+"""
+RETRIES: Number of retries before giving up sending more packets
+TIMEOUT: number of seconds before resending a packet
+"""
+RETRIES = 10
+TIMEOUT = 15

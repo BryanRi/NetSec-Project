@@ -224,33 +224,40 @@ class BTCPClientSocket(BTCPSocket):
         self.state = BTCPStates.SYN_SENT
 
         # wait for server to send a segment back
-        # .get() waits until there is a segment in the queue
-        response = self.received_segments.get()
+        response = None
+        retries = 0
+        while not response and retries < RETRIES:
+            try:
+                response = self.received_segments.get(timeout=TIMEOUT)
+            except queue.Empty:
+                retries += 1
+        if retries == RETRIES:
+            self.state = BTCPStates.CLOSED
+        else:
+            # add 1 to the seqnum of the server
+            self.acknum += 1
+            # add 1 to self.seqnum
+            self.seqnum += 1
+            # set ACK
+            header = self.build_segment_header(self.seqnum,
+                                               self.acknum,
+                                               ack_set=True
+                                               # length=
+                                               # window=
+                                              )
+            checksum = self.in_cksum(header)
 
-        # add 1 to the seqnum of the server
-        self.acknum += 1
-        # add 1 to self.seqnum
-        self.seqnum += 1
-        # set ACK
-        header = self.build_segment_header(self.seqnum,
-                                           self.acknum,
-                                           ack_set=True
-                                           # length=
-                                           # window=
-                                          )
-        checksum = self.in_cksum(header)
-
-        header = self.build_segment_header(self.seqnum,
-                                           self.acknum,
-                                           ack_set=True,
-                                           checksum=checksum
-                                           # length=
-                                           # window=
-                                          )
-        # send segment
-        segment = header + payload
-        self._lossy_layer.send_segment(segment)
-        self.state = BTCPStates.ESTABLISHED
+            header = self.build_segment_header(self.seqnum,
+                                               self.acknum,
+                                               ack_set=True,
+                                               checksum=checksum
+                                               # length=
+                                               # window=
+                                              )
+            # send segment
+            segment = header + payload
+            self._lossy_layer.send_segment(segment)
+            self.state = BTCPStates.ESTABLISHED
 
 
     def send(self, data):
