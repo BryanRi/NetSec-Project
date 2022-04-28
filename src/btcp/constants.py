@@ -34,6 +34,8 @@ SEGMENT_SIZE = HEADER_SIZE + PAYLOAD_SIZE
 """
 RETRIES: Number of retries before giving up sending more packets
 TIMEOUT: number of seconds before resending a packet
+WINDOW: the initial window size
 """
 RETRIES = 10
-TIMEOUT = 15
+TIMEOUT = 1
+WINDOW = 15

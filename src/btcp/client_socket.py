@@ -53,9 +53,9 @@ class BTCPClientSocket(BTCPSocket):
         self.state = BTCPStates.CLOSED
         self.seqnum = None
         self.acknum = 0
-        self.client_window = 15
+        self.client_window = WINDOW
         self.server_window = None
-        self.received_segments = queue.Queue(maxsize=self.client_window)
+        self.received_segments = queue.Queue(maxsize=WINDOW)
         self.last_rec_ack = None  # last acknowledged segment by the server
 
 
@@ -230,6 +230,7 @@ class BTCPClientSocket(BTCPSocket):
             try:
                 response = self.received_segments.get(timeout=TIMEOUT)
             except queue.Empty:
+                self._lossy_layer.send_segment(segment)
                 retries += 1
         if retries == RETRIES:
             self.state = BTCPStates.CLOSED
@@ -346,37 +347,43 @@ class BTCPClientSocket(BTCPSocket):
         self.state = BTCPStates.FIN_SENT
 
         # search for ack/fin segment in the self.received_segments
-        response = self.received_segments.get()
-        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
-            self.unpack_segment_header(response)
-        while not (syn_set == 1 and ack_set == 1 and self.seqnum+1 == acknum):
-            response = self.received_segments.get()
-            seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
-                self.unpack_segment_header(response)
+        syn_set, ack_set, acknum = None, None, None
+        retries = 0
+        while not (syn_set == 1 and ack_set == 1 and self.seqnum+1 == acknum) and retries < RETRIES:
+            try:
+                response = self.received_segments.get(timeout=TIMEOUT)
+                seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = \
+                    self.unpack_segment_header(response)
+            except queue.Empty:
+                self._lossy_layer.send_segment(segment)
+                retries += 1
+        if retries == RETRIES:
+            # number of retries has been exceeded, close connection
+            self.state = BTCPStates.CLOSED
+        else:
+            # respond with ack
+            # add 1 to the seqnum of the server
+            self.acknum += 1
+            # add 1 to self.seqnum
+            self.seqnum += 1
+            # set ACK
+            header = self.build_segment_header(self.seqnum,
+                                               self.acknum,
+                                               ack_set=True
+                                               # window, length
+                                               )
+            checksum = self.in_cksum(header)
 
-        # respond with ack
-        # add 1 to the seqnum of the server
-        self.acknum += 1
-        # add 1 to self.seqnum
-        self.seqnum += 1
-        # set ACK
-        header = self.build_segment_header(self.seqnum,
-                                           self.acknum,
-                                           ack_set=True
-                                           # window, length
-                                           )
-        checksum = self.in_cksum(header)
-
-        header = self.build_segment_header(self.seqnum,
-                                           self.acknum,
-                                           ack_set=True,
-                                           checksum=checksum
-                                           # window, length
-                                           )
-        # send segment
-        segment = header + payload
-        self._lossy_layer.send_segment(segment)
-        self.state = BTCPStates.CLOSED
+            header = self.build_segment_header(self.seqnum,
+                                               self.acknum,
+                                               ack_set=True,
+                                               checksum=checksum
+                                               # window, length
+                                               )
+            # send segment
+            segment = header + payload
+            self._lossy_layer.send_segment(segment)
+            self.state = BTCPStates.CLOSED
 
 
     def close(self):
