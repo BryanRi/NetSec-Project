@@ -59,6 +59,8 @@ class BTCPServerSocket(BTCPSocket):
         
         self.fin_retries = None
         self.fin_timeout = None
+        
+        self.ack_timeout = None
 
 
     ###########################################################################
@@ -156,8 +158,10 @@ class BTCPServerSocket(BTCPSocket):
                 return
             
             if(NOFLAG):
+                self.ack_timeout = None
                 if(seqnum == (self.acknum + 1)):
                     self.acknum += 1
+                    self.seqnum += 1
                     self._lossy_layer.send_segment(generate_ack())                              
                     try:
                         self._recvbuf.put_nowait(chunk)
@@ -193,7 +197,16 @@ class BTCPServerSocket(BTCPSocket):
         if(self.state == BTCPStates.CLOSING && time.time() > self.fin_timeout):
               self.state = BTCPStates.CLOSED
               return
-                                                   
+        
+        if(self.state == BTCPStates.ESTABLISHED):
+              if(self.ack_timeout is None)
+                  self.ack_timeout = time.time()+10
+                  return
+              elif(self.ack_timeout <= time.time()):
+                  self._lossy_layer.send_segment(generate_ack())
+                  return
+                    
+              
                                                    
         pass # present to be able to remove the NotImplementedError without having to implement anything yet.
         raise NotImplementedError("No implementation of lossy_layer_tick present. Read the comments & code of server_socket.py.")
