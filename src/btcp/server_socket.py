@@ -138,7 +138,7 @@ class BTCPServerSocket(BTCPSocket):
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
                 payload = b"".join([b"\x00" for i in range(1008)])
                 checksum = self.in_cksum(header)
-                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, # window, length)
+                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum,  window=self.window, datalen=length(payload))
                 fin_ack = header + payload
                 self._lossy_layer.send_segment(fin_ack)
                 self.fin_retries += 1
@@ -148,11 +148,11 @@ class BTCPServerSocket(BTCPSocket):
             if(FIN): 
                 self.state = BTCPStates.CLOSING
                 self.fin_retries = 0
-                self.fin_timeout = time.time() + 60*5
+                self.fin_timeout = time.time() + 60
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
                 payload = b"".join([b"\x00" for i in range(1008)])
                 checksum = self.in_cksum(header)
-                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, # window, length)
+                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, window=self.window, datalen=length(payload))
                 fin_ack = header + payload
                 self._lossy_layer.send_segment(fin_ack)
                 return
@@ -161,7 +161,7 @@ class BTCPServerSocket(BTCPSocket):
                 self.ack_timeout = None
                 if(seqnum == (self.acknum + 1)):
                     self.acknum += 1
-                    self.seqnum += 1
+                    #self.seqnum += 1
                     self._lossy_layer.send_segment(generate_ack())                              
                     try:
                         self._recvbuf.put_nowait(chunk)
@@ -194,7 +194,7 @@ class BTCPServerSocket(BTCPSocket):
         candidate to put in a helper method which can be called from either
         lossy_layer_segment_received or lossy_layer_tick.
         """
-        if(self.state == BTCPStates.CLOSING && time.time() > self.fin_timeout):
+        if(self.state == BTCPStates.CLOSING && time.time() >= self.fin_timeout):
               self.state = BTCPStates.CLOSED
               return
         
@@ -202,7 +202,7 @@ class BTCPServerSocket(BTCPSocket):
               if(self.ack_timeout is None)
                   self.ack_timeout = time.time()+10
                   return
-              elif(self.ack_timeout <= time.time()):
+              elif(time.time() >= self.ack_timeout):
                   self._lossy_layer.send_segment(generate_ack())
                   return
                     
@@ -215,7 +215,7 @@ class BTCPServerSocket(BTCPSocket):
         header = self.build_segment_header(self.seqnum, self.acknum, ack_set=True)
         payload = b"".join([b"\x00" for i in range(1008)])
         checksum = self.in_cksum(header)
-        header = self.build_segment_header(self.seqnum,self.acknum,ack_set=True,checksum=checksum, # window, length)
+        header = self.build_segment_header(self.seqnum,self.acknum,ack_set=True,checksum=checksum, window = self.window, datalen=length(payload))
         ack = header + payload
         return ack
 
