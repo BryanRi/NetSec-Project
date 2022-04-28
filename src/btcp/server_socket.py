@@ -56,6 +56,9 @@ class BTCPServerSocket(BTCPSocket):
         # For this rudimentary implementation, we simply hope receive manages
         # to be faster than send.
         self._recvbuf = queue.Queue(maxsize=1000)
+        
+        self.fin_retries = None
+        self.fin_timeout = None
 
 
     ###########################################################################
@@ -114,11 +117,11 @@ class BTCPServerSocket(BTCPSocket):
         
         if(self.state != BTCPStates.ESTABLISHED):
             if(self.state == BTCPStates.ACCEPTING && SYN):
-                self.acknum = seqnum + 1
+                self.acknum = seqnum
                 self.state = BTCPStates.SYN_RCVD
                 return #?
 
-            if(self.state == BTCPStates.SYN_RCVD && SYNACK && (self.seqnum+1 == acknum)):
+            if(self.state == BTCPStates.SYN_RCVD && SYNACK && (self.seqnum == acknum)):
                 self.state = BTCPStates.ESTABLISHED
                 return #?
             
@@ -127,17 +130,23 @@ class BTCPServerSocket(BTCPSocket):
                 return
             
             if(self.state == BTCPStates.CLOSING && FIN):  
+                if(self.fin_retries >= 10):
+                    self.state = BTCPStates.CLOSED
+                    return
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
                 payload = b"".join([b"\x00" for i in range(1008)])
                 checksum = self.in_cksum(header)
                 header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum, # window, length)
                 fin_ack = header + payload
                 self._lossy_layer.send_segment(fin_ack)
+                self.fin_retries += 1
                 return
                                                    
         else:
             if(FIN): 
                 self.state = BTCPStates.CLOSING
+                self.fin_retries = 0
+                self.fin_timeout = time.time() + 60*5
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
                 payload = b"".join([b"\x00" for i in range(1008)])
                 checksum = self.in_cksum(header)
@@ -147,14 +156,18 @@ class BTCPServerSocket(BTCPSocket):
                 return
             
             if(NOFLAG):
-                try:
-                    self._recvbuf.put_nowait(chunk)
-                except queue.Full:
-                    # Data gets silently dropped if the receive buffer is full. You
-                    # need to ensure this doesn't happen by using window sizes and not
-                    # acknowledging dropped data.
-                    pass
-
+                if(seqnum == (self.acknum + 1)):
+                    self.acknum += 1
+                    self._lossy_layer.send_segment(generate_ack())                              
+                    try:
+                        self._recvbuf.put_nowait(chunk)
+                    except queue.Full:
+                        # Data gets silently dropped if the receive buffer is full. You
+                        # need to ensure this doesn't happen by using window sizes and not
+                        # acknowledging dropped data.
+                        pass
+                 else:
+                     self._lossy_layer.send_segment(generate_ack())
 
     def lossy_layer_tick(self):
         """Called by the lossy layer whenever no segment has arrived for
@@ -177,8 +190,21 @@ class BTCPServerSocket(BTCPSocket):
         candidate to put in a helper method which can be called from either
         lossy_layer_segment_received or lossy_layer_tick.
         """
+        if(self.state == BTCPStates.CLOSING && time.time() > self.fin_timeout):
+              self.state = BTCPStates.CLOSED
+              return
+                                                   
+                                                   
         pass # present to be able to remove the NotImplementedError without having to implement anything yet.
         raise NotImplementedError("No implementation of lossy_layer_tick present. Read the comments & code of server_socket.py.")
+    
+    def generate_ack(self):
+        header = self.build_segment_header(self.seqnum, self.acknum, ack_set=True)
+        payload = b"".join([b"\x00" for i in range(1008)])
+        checksum = self.in_cksum(header)
+        header = self.build_segment_header(self.seqnum,self.acknum,ack_set=True,checksum=checksum, # window, length)
+        ack = header + payload
+        return ack
 
 
     ###########################################################################
