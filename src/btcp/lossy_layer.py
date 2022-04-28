@@ -9,7 +9,7 @@ import socket
 import select
 import sys
 import threading
-from btcp.constants import *
+from src.btcp.constants import *
 
 
 def handle_incoming_segments(btcp_socket, event, udp_socket):
