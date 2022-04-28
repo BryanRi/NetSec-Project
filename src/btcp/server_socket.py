@@ -269,6 +269,7 @@ class BTCPServerSocket(BTCPSocket):
         
         while true:
             timeout = time.time() + 60*5
+            self.window = 
             self.state = BTCPStates.ACCEPTING
             while(self.state != BTCPStates.SYN_RCVD):
                 if time.time() > timeout:
@@ -279,7 +280,7 @@ class BTCPServerSocket(BTCPSocket):
             header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
             payload = b"".join([b"\x00" for i in range(1008)])
             checksum = self.in_cksum(header)
-            header = self.build_segment_header(self.seqnum,self.acknum,syn_set=True,ack_set=True,checksum=checksum, # window, length)
+            header = self.build_segment_header(self.seqnum,self.acknum,syn_set=True,ack_set=True,checksum=checksum, window, length)
             syn_ack = header + payload
             retries = 0
             while(self.state != BTCPStates.ESTABLISHED && retries < 10):
