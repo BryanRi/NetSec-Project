@@ -171,8 +171,8 @@ class BTCPServerSocket(BTCPSocket):
                         # need to ensure this doesn't happen by using window sizes and not
                         # acknowledging dropped data.
                         pass
-                 else:
-                     self._lossy_layer.send_segment(generate_ack())
+                else:
+                    self._lossy_layer.send_segment(generate_ack())
 
     def lossy_layer_tick(self):
         """Called by the lossy layer whenever no segment has arrived for
@@ -197,7 +197,7 @@ class BTCPServerSocket(BTCPSocket):
         """
         
         #close connection if no FIN_ACK is received after the timeout has passed
-        if(self.state == BTCPStates.CLOSING && time.time() >= self.fin_timeout):
+        if(self.state == BTCPStates.CLOSING and time.time() >= self.fin_timeout):
               self.state = BTCPStates.CLOSED
               return
         
