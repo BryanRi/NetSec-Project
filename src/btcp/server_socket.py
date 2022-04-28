@@ -270,7 +270,7 @@ class BTCPServerSocket(BTCPSocket):
         
         while true:
             connect_timeout = time.time() + 60*5
-            self.window = 1000
+            self.window = self._recvbuf.maxsize
             self.state = BTCPStates.ACCEPTING
             while(self.state != BTCPStates.SYN_RCVD):
                 if time.time() >= connect_timeout:
@@ -329,9 +329,7 @@ class BTCPServerSocket(BTCPSocket):
 
         Again, you should feel free to deviate from how this usually works.
         """
-
-        raise NotImplementedError("Only rudimentary implementation of recv present. Read the comments & code of server_socket.py, then remove the NotImplementedError.")
-
+        
         # Rudimentary example implementation:
         # Empty the queue in a loop, reading into a larger bytearray object.
         # Once empty, return the data as bytes.
@@ -340,6 +338,7 @@ class BTCPServerSocket(BTCPSocket):
         # Proper handling should use the bTCP state machine to check that the
         # client has disconnected when a timeout happens, and keep blocking
         # until data has actually been received if it's still connected.
+        
         data = bytearray()
         try:
             # Wait until one segment becomes available in the buffer, or
@@ -350,6 +349,7 @@ class BTCPServerSocket(BTCPSocket):
                 # exits the loop. If that happens, data contains received
                 # segments so that will *not* signal disconnect.
                 data.extend(self._recvbuf.get_nowait())
+                self.window = self._recvbuf.maxsize-self._recvbuf.qsize()
         except queue.Empty:
             pass # (Not break: the exception itself has exited the loop)
         return bytes(data)
