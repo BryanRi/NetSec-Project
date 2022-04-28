@@ -112,28 +112,28 @@ class BTCPServerSocket(BTCPSocket):
             return None
         
         # which flags combination is set in the received segment
-        SYNACK = syn_set && ack_set
-        SYN = syn_set && !SYNACK
-        ACK = ack_set && !SYNACK
-        FIN = fin_set && !SYN && !ACK
-        NOFLAG = !(SYN || ACK || FIN || SYNACK)
+        SYNACK = syn_set and ack_set
+        SYN = syn_set and not(SYNACK)
+        ACK = ack_set and not(SYNACK)
+        FIN = fin_set and not(SYN) and not(ACK)
+        NOFLAG = not(SYN or ACK or FIN or SYNACK)
         
         #(dis)connection handshake 
         if(self.state != BTCPStates.ESTABLISHED):
-            if(self.state == BTCPStates.ACCEPTING && SYN):
+            if(self.state == BTCPStates.ACCEPTING and SYN):
                 self.acknum = seqnum
                 self.state = BTCPStates.SYN_RCVD
                 return
 
-            if(self.state == BTCPStates.SYN_RCVD && SYNACK && (self.seqnum == acknum)):
+            if(self.state == BTCPStates.SYN_RCVD and SYNACK):
                 self.state = BTCPStates.ESTABLISHED
                 return
             
-            if(self.state == BTCPStates.CLOSING && ACK):    
+            if(self.state == BTCPStates.CLOSING and ACK):    
                 self.state = BTCPStates.CLOSED
                 return
             
-            if(self.state == BTCPStates.CLOSING && FIN):  
+            if(self.state == BTCPStates.CLOSING and FIN):  
                 if(self.fin_retries >= 10):
                     self.state = BTCPStates.CLOSED
                     return
@@ -285,7 +285,7 @@ class BTCPServerSocket(BTCPSocket):
             header = self.build_segment_header(self.seqnum,self.acknum,syn_set=True,ack_set=True,checksum=checksum, window=self.window)
             syn_ack = header + payload
             retries = 0
-            while(self.state != BTCPStates.ESTABLISHED && retries < 10):
+            while(self.state != BTCPStates.ESTABLISHED and retries < 10):
                 self._lossy_layer.send_segment(syn_ack)
                 retries += 1
                 time.sleep(10)
