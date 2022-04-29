@@ -113,7 +113,6 @@ class BTCPClientSocket(BTCPSocket):
         elif self.state == BTCPStates.FIN_SENT:
             if ack_set == 1 and fin_set == 1 and self.seqnum+1 == acknum:
                 self.finack_recv = True
-                # self.received_segments.put(segment)
         # regular ack from server
         elif self.state == BTCPStates.ESTABLISHED:
             self.server_window = window
@@ -124,7 +123,7 @@ class BTCPClientSocket(BTCPSocket):
                 timeout, acknum, segment = self.segments_in_transit[i]
                 while self.last_rec_ack > acknum:
                     i += 1
-                    acknum, segment = self.segments_in_transit[i]
+                    timeout, acknum, segment = self.segments_in_transit[i]
                 self.segments_in_transit = self.segments_in_transit[i:]
 
 
@@ -160,9 +159,10 @@ class BTCPClientSocket(BTCPSocket):
         # and storing the segments for retransmission somewhere.
 
         # resend all segments whose timer has run out
-        if len(self.segments_in_transit) > 0:
-            timeout, seqnum, segment = self.segments_in_transit[0]
-            while timeout+TIMEOUT > time.time():
+        for i in range(len(self.segments_in_transit)):
+            timeout, seqnum, segment = self.segments_in_transit[i]
+            if timeout+TIMEOUT < time.time():
+                self.segments_in_transit[i] = (time.time(), seqnum, segment)
                 self._lossy_layer.send_segment(segment)
 
         while self.seqnum - self.last_rec_ack < self.server_window:
@@ -233,7 +233,7 @@ class BTCPClientSocket(BTCPSocket):
         boolean or enum has the expected value. We do not think you will need
         more advanced thread synchronization in this project.
         """
-        self.seqnum = int.from_bytes(urandom(2),byteorder='big')
+        self.seqnum = int.from_bytes(urandom(2), byteorder='big')
         header = self.build_segment_header(self.seqnum,
                                            self.acknum,
                                            syn_set=True,
