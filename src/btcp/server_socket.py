@@ -1,6 +1,7 @@
 from btcp.btcp_socket import BTCPSocket, BTCPStates
 from btcp.lossy_layer import LossyLayer
 from btcp.constants import *
+from os import urandom
 
 import queue
 import struct
@@ -59,8 +60,8 @@ class BTCPServerSocket(BTCPSocket):
         
         self.fin_retries = None
         self.fin_timeout = None
-        
         self.ack_timeout = None
+        self.window = WINDOW
 
 
     ###########################################################################
@@ -95,74 +96,73 @@ class BTCPServerSocket(BTCPSocket):
 
         Remember, we expect you to implement this *as a state machine!*
         """
-        if(self.state == BTCPStates.CLOSED):
-            return None #don't receive segments if server is in the CLOSED state
+        if self.state == BTCPStates.CLOSED:
+            return None  # don't receive segments if server is in the CLOSED state
+   
         
-        # Get length from header. Change this to a proper segment header unpack
-        # after implementing BTCPSocket.unpack_segment_header in btcp_socket.py
-        datalen, = struct.unpack("!H", segment[6:8])
-        # Slice data from incoming segment.
-        
-        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum =  unpack_segment_header(segment[:HEADER_SIZE])
+        seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum = self.unpack_segment_header(segment[:HEADER_SIZE])
         chunk = segment[HEADER_SIZE:HEADER_SIZE + datalen]
-        
+        print(f"Segment Received: CHECKSUM = {checksum}, seqnum = {seqnum}, acknum={acknum}, syn_set = {syn_set}, ack_set = {ack_set}, fin_set = {fin_set}, window = {window}, datalen = {datalen}")
         # checksum verification
-        check = self.in_cksum(segment)
-        if check != 0xFFFF:
-            return None
+        check = self.in_cksum(self.build_segment_header(seqnum, acknum, syn_set, ack_set, fin_set, window, datalen) + chunk)
+        if check != checksum:
+            print("Incorrect checksum")
+            return None  # do nothing when checksum fails
+
         
         # which flags combination is set in the received segment
         SYNACK = syn_set and ack_set
-        SYN = syn_set and not(SYNACK)
-        ACK = ack_set and not(SYNACK)
-        FIN = fin_set and not(SYN) and not(ACK)
+        SYN = syn_set and not SYNACK
+        ACK = ack_set and not SYNACK
+        FIN = fin_set and not SYN and not ACK
         NOFLAG = not(SYN or ACK or FIN or SYNACK)
         
         #(dis)connection handshake 
-        if(self.state != BTCPStates.ESTABLISHED):
-            if(self.state == BTCPStates.ACCEPTING and SYN):
-                self.acknum = seqnum
+        if self.state != BTCPStates.ESTABLISHED:
+            if self.state == BTCPStates.ACCEPTING and SYN:
+                self.acknum = seqnum + 1
                 self.state = BTCPStates.SYN_RCVD
                 return
 
-            if(self.state == BTCPStates.SYN_RCVD and SYNACK):
+            if self.state == BTCPStates.SYN_RCVD and ACK:
+                print("ACK received")
                 self.state = BTCPStates.ESTABLISHED
                 return
             
-            if(self.state == BTCPStates.CLOSING and ACK):    
+            if self.state == BTCPStates.CLOSING and ACK:
                 self.state = BTCPStates.CLOSED
                 return
             
-            if(self.state == BTCPStates.CLOSING and FIN):  
-                if(self.fin_retries >= 10):
+            if self.state == BTCPStates.CLOSING and FIN:
+                if self.fin_retries >= 10:
                     self.state = BTCPStates.CLOSED
                     return
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
-                payload = b"".join([b"\x00" for i in range(1008)])
+                payload = b"".join([b"\x00" for _ in range(1008)])
                 checksum = self.in_cksum(header)
-                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum)
+                header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True, checksum=checksum)
                 fin_ack = header + payload
                 self._lossy_layer.send_segment(fin_ack)
                 self.fin_retries += 1
                 return
-                                                   
+
         else:
-            if(FIN): 
+            if FIN:
                 self.state = BTCPStates.CLOSING
                 self.fin_retries = 0
                 self.fin_timeout = time.time() + 30
                 header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True)
-                payload = b"".join([b"\x00" for i in range(1008)])
+                payload = b"".join([b"\x00" for _ in range(1008)])
                 checksum = self.in_cksum(header)
-                header = self.build_segment_header(self.seqnum,self.acknum,fin_set=True,ack_set=True,checksum=checksum) #
+                header = self.build_segment_header(self.seqnum, self.acknum, fin_set=True, ack_set=True, checksum=checksum)
                 fin_ack = header + payload
                 self._lossy_layer.send_segment(fin_ack)
                 return
             
-            if(NOFLAG):
+            if NOFLAG:
                 self.ack_timeout = None
-                if(seqnum == (self.acknum + 1)):
-                    self._lossy_layer.send_segment(generate_ack())
+                if seqnum == (self.acknum + 1):
+                    self._lossy_layer.send_segment(self.generate_ack())
                     self.acknum += 1
                     try:
                         self._recvbuf.put_nowait(chunk)
@@ -172,7 +172,7 @@ class BTCPServerSocket(BTCPSocket):
                         # acknowledging dropped data.
                         pass
                 else:
-                    self._lossy_layer.send_segment(generate_ack())
+                    self._lossy_layer.send_segment(self.generate_ack())
 
     def lossy_layer_tick(self):
         """Called by the lossy layer whenever no segment has arrived for
@@ -197,25 +197,25 @@ class BTCPServerSocket(BTCPSocket):
         """
         
         #close connection if no FIN_ACK is received after the timeout has passed
-        if(self.state == BTCPStates.CLOSING and time.time() >= self.fin_timeout):
-              self.state = BTCPStates.CLOSED
-              return
+        if self.state == BTCPStates.CLOSING and time.time() >= self.fin_timeout:
+            self.state = BTCPStates.CLOSED
+            return None
         
         #resend ACK if timeout has passed
-        if(self.state == BTCPStates.ESTABLISHED):
-              if(self.ack_timeout is None):
-                  self.ack_timeout = time.time() + self.timeout
-                  return
-              elif(time.time() >= self.ack_timeout):
-                  self._lossy_layer.send_segment(generate_ack())
-                  return
+        if self.state == BTCPStates.ESTABLISHED:
+            if self.ack_timeout is None:
+                self.ack_timeout = time.time() + TIMEOUT
+                return None
+            elif time.time() >= self.ack_timeout:
+                self._lossy_layer.send_segment(self.generate_ack())
+                return None
                 
     
     def generate_ack(self):
         header = self.build_segment_header(self.seqnum, self.acknum, ack_set=True)
-        payload = b"".join([b"\x00" for i in range(1008)])
+        payload = b"".join([b"\x00" for _ in range(1008)])
         checksum = self.in_cksum(header)
-        header = self.build_segment_header(self.seqnum,self.acknum,ack_set=True,checksum=checksum, window = self.window)
+        header = self.build_segment_header(self.seqnum, self.acknum, ack_set=True, checksum=checksum, window=self.window)
         ack = header + payload
         return ack
 
@@ -267,27 +267,34 @@ class BTCPServerSocket(BTCPSocket):
         more advanced thread synchronization in this project.
         """
         
-        while true:
-            connect_timeout = time.time() + 60*5
-            self.window = self._recvbuf.maxsize
+        while True:
+            connect_timeout = time.time() + 20
             self.state = BTCPStates.ACCEPTING
-            while(self.state != BTCPStates.SYN_RCVD):
+
+            print("State = ACCEPTING")
+
+            while self.state != BTCPStates.SYN_RCVD:
                 if time.time() >= connect_timeout:
                     self.state = BTCPStates.CLOSED
                     return
-            
-            header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True)
-            payload = b"".join([b"\x00" for i in range(1008)])
+
+            print("State = SYN_RCVD")
+
+            self.seqnum = int.from_bytes(urandom(2), byteorder='big')
+            header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True, window=self.window)
+            payload = b"".join([b"\x00" for _ in range(1008)])
             checksum = self.in_cksum(header)
-            header = self.build_segment_header(self.seqnum,self.acknum,syn_set=True,ack_set=True,checksum=checksum, window=self.window)
+            header = self.build_segment_header(self.seqnum, self.acknum, syn_set=True, ack_set=True, window=self.window, checksum=checksum)
             syn_ack = header + payload
             retries = 0
-            while(self.state != BTCPStates.ESTABLISHED and retries < 10):
+            while self.state != BTCPStates.ESTABLISHED and retries < 10:
                 self._lossy_layer.send_segment(syn_ack)
+                print(f"sent SYNACK with CHECKSUM = {checksum}, seqnum = {self.seqnum}, acknum={self.acknum},  window = {self.window}, datalen = 0")
                 retries += 1
                 time.sleep(10)
-           
-            if(self.state == BTCPStates.ESTABLISHED):
+
+            if self.state == BTCPStates.ESTABLISHED:
+                print("Connection established")
                 return
                                                
             continue
@@ -348,7 +355,7 @@ class BTCPServerSocket(BTCPSocket):
                 data.extend(self._recvbuf.get_nowait())
                 self.window = self._recvbuf.maxsize-self._recvbuf.qsize()
         except queue.Empty:
-            pass # (Not break: the exception itself has exited the loop)
+            pass  # (Not break: the exception itself has exited the loop)
         return bytes(data)
 
 

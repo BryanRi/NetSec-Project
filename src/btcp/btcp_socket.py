@@ -45,14 +45,14 @@ class BTCPSocket:
         """
         # Signal nonsensical request (checksum of nothing?) with 0x0000
         if not segment:
-            return 0x0000
+            return int(0x0000,16)
 
         checksum = 0
-        for b in struct.iter_unpack('!H', bytes):
-            checksum += b
+        for b in struct.iter_unpack('!H', segment): 
+            checksum += b[0]
             if checksum > 2 ** 16:
                 checksum -= 2 ** 16 - 1  # double minus is adding 1
-        return hex(2 ** 16 - checksum)  # invert the checksum
+        return 2 ** 16 - checksum  # invert the checksum
 
 
     @staticmethod
@@ -96,7 +96,7 @@ class BTCPSocket:
             struct.unpack("!HHBBHH", header)
         syn_set = flags > 3
         flags %= 4
-        ack_set = flags > 2
+        ack_set = flags > 1
         flags %= 2
         fin_set = flags > 0
         return seqnum, acknum, syn_set, ack_set, fin_set, window, datalen, checksum
